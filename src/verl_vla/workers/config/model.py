@@ -1,6 +1,16 @@
 # Copyright 2026 Bytedance Ltd. and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Model configuration that preserves native policy checkpoint formats."""
 
@@ -121,9 +131,19 @@ class VLAModelConfig(HFModelConfig):
         if self.load_tokenizer:
             self.local_tokenizer_path = resolve_model_path(self.tokenizer_path, use_shm=self.use_shm)
             if architecture == "openvla_oft":
-                from verl_vla.models.openvla_oft.processing_prismatic import PrismaticProcessor
+                from transformers import AutoTokenizer
 
-                self.processor = PrismaticProcessor.from_pretrained(self.local_tokenizer_path)
+                from verl_vla.models.openvla_oft.processing_prismatic import (
+                    PrismaticImageProcessor,
+                    PrismaticProcessor,
+                )
+
+                image_processor = PrismaticImageProcessor.from_pretrained(self.local_tokenizer_path)
+                tokenizer = AutoTokenizer.from_pretrained(
+                    self.local_tokenizer_path,
+                    trust_remote_code=self.trust_remote_code,
+                )
+                self.processor = PrismaticProcessor(image_processor=image_processor, tokenizer=tokenizer)
                 self.tokenizer = self.processor.tokenizer
             else:
                 self.tokenizer = hf_tokenizer(self.local_tokenizer_path, trust_remote_code=self.trust_remote_code)

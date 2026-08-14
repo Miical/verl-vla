@@ -68,3 +68,19 @@ def test_gr00t_sft_example_composes_through_training_entrypoint():
     assert config.cluster.actor_rollout_ref.model.adapter.policy_type == "libero"
     assert config.cluster.actor_rollout_ref.model.override_config.load_bf16 is True
     assert config.data.action_delta_steps == 16
+
+
+def test_openvla_sft_example_composes_through_training_entrypoint():
+    config = _compose_sft_config(
+        "--config-dir",
+        str(REPO_ROOT / "examples/fine_tuning/openvla/libero_spatial"),
+        "--config-name",
+        "openvla_sft",
+        "cluster.actor_rollout_ref.model.path=/tmp/openvla",
+        "data.root=/tmp/libero-spatial",
+    )
+
+    assert config.cluster.actor_rollout_ref.model.adapter.unnorm_key == "libero_spatial_no_noops"
+    assert config.cluster.actor_rollout_ref.actor.mini_batch_size == 64
+    assert config.cluster.actor_rollout_ref.actor.micro_batch_size == 8
+    assert config.data.action_delta_steps == 8

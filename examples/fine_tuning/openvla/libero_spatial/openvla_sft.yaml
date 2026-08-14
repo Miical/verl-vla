@@ -1,0 +1,72 @@
+# Copyright 2026 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+defaults:
+  - /train/sft@_global_
+  - override /model/adapter@cluster.actor_rollout_ref.model.adapter: openvla
+  - _self_
+
+cluster:
+  checkpoint:
+    default_local_dir: ./outputs/train/openvla-sft/libero-spatial-base/checkpoints
+  resource:
+    model:
+      resource_label: model
+      gpus_per_node: 8
+      workers_per_node: 8
+  actor_rollout_ref:
+    actor:
+      mini_batch_size: 64
+      micro_batch_size: 8
+      optim:
+        lr: 5e-4
+        lr_scheduler_type: constant
+        weight_decay: 0.01
+      fsdp_config:
+        model_dtype: bfloat16
+        reshard_after_forward: false
+        wrap_policy:
+          transformer_layer_cls_to_wrap:
+            - PrismaticProjector
+            - LlamaDecoderLayer
+      checkpoint:
+        save_contents: [model, optimizer, extra, hf_model]
+        load_contents: [model, optimizer, extra]
+    model:
+      lora:
+        rank: 32
+        alpha: 16
+        target_modules: all-linear
+
+data:
+  repo_id: lerobot/libero_spatial_image
+  batch_size: 64
+  action_delta_steps: 8
+  num_workers: 8
+  prefetch_factor: 2
+
+trainer:
+  project_name: openvla-sft
+  experiment_name: libero-spatial-base
+  logger: [console, tensorboard]
+  total_epochs: 60
+  save_freq: 500
+  save_last: true
+
+ray_kwargs:
+  ray_init:
+    runtime_env:
+      env_vars:
+        HF_HOME: ${oc.env:HF_HOME,./.cache/huggingface}
+        TENSORBOARD_DIR: ./outputs/train/openvla-sft/libero-spatial-base/tensorboard

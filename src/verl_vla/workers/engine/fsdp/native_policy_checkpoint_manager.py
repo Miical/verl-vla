@@ -1,6 +1,16 @@
 # Copyright 2026 Bytedance Ltd. and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """FSDP checkpoint manager with native policy export support."""
 
@@ -57,8 +67,16 @@ class NativePolicyFSDPCheckpointManager(FSDPCheckpointManager):
     def save_checkpoint(self, local_path, hdfs_path=None, global_step=0, max_ckpt_to_keep=None):
         should_export = self.should_save_hf_model
         original_contents = self.checkpoint_save_contents
+        adapter = _unwrap_trainable_model(self.model)
+        model_config = adapter.config
+        auto_map = getattr(model_config, "auto_map", None)
         if should_export:
             self.checkpoint_save_contents = [item for item in original_contents if item != "hf_model"]
+            # verl's generic checkpoint manager sees the verl-vla wrapper and
+            # cannot copy native Transformers custom code from it. The adapter
+            # owns that export and restores the native config below.
+            if auto_map is not None:
+                del model_config.auto_map
         try:
             super().save_checkpoint(
                 local_path,
@@ -68,6 +86,8 @@ class NativePolicyFSDPCheckpointManager(FSDPCheckpointManager):
             )
         finally:
             self.checkpoint_save_contents = original_contents
+            if auto_map is not None:
+                model_config.auto_map = auto_map
 
         if not should_export:
             return
@@ -91,7 +111,6 @@ class NativePolicyFSDPCheckpointManager(FSDPCheckpointManager):
         else:
             state_dict = get_fsdp_full_state_dict(self.model, offload_to_cpu=True, rank0_only=True)
         if self.rank == 0:
-            adapter = _unwrap_trainable_model(self.model)
             export_policy = getattr(adapter, "export_policy", None)
             output_dir = os.path.join(local_path, "huggingface")
             if callable(export_policy):

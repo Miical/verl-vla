@@ -1,6 +1,16 @@
 # Copyright 2026 Bytedance Ltd. and/or its affiliates
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Explicit VLA model construction without Transformers AutoClass registration."""
 
@@ -149,7 +159,19 @@ def build_vla_model(model_config, *, torch_dtype: torch.dtype):
         config = OpenVLAConfig.from_pretrained(path)
         _apply_overrides(config, overrides)
         policy = OpenVLAForActionPrediction.from_pretrained(path, config=config, torch_dtype=torch_dtype)
-        return OpenVLATrainableModel(policy)
+        statistics_path = Path(path) / "dataset_statistics.json"
+        if statistics_path.is_file():
+            with statistics_path.open(encoding="utf-8") as file:
+                policy.norm_stats = json.load(file)
+        processor = model_config.processor
+        if processor is None:
+            raise ValueError("OpenVLA requires its native PrismaticProcessor")
+        return OpenVLATrainableModel(
+            policy,
+            processor=processor,
+            adapter_config=model_config.adapter,
+            artifact_source_dir=path,
+        )
 
     if architecture == "recap_value_critic":
         from .recap_value_critic import ReCapValueCriticConfig, ReCapValueCriticTrainableModel
