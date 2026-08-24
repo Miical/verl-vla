@@ -63,7 +63,7 @@ class EnvLoop:
         reset_future: asyncio.Future,
         *,
         eval: bool = False,
-    ) -> DataProto:
+    ) -> tuple[DataProto, DataProto]:
         total_start_t = time.perf_counter()
         reset_wait_start_t = time.perf_counter()
         reset_results = reset_future.get()
@@ -80,12 +80,16 @@ class EnvLoop:
         if self.switch_actor_rollout_mode:
             self.rollout_wg.switch_to_rollout()
             run_start_t = time.perf_counter()
-            output, run_metrics = loop.run_until_complete(self.run(reset_results, rollout_meta_info, env_mode=env_mode))
+            output, last_obs, run_metrics = loop.run_until_complete(
+                self.run(reset_results, rollout_meta_info, env_mode=env_mode)
+            )
             run_s = time.perf_counter() - run_start_t
             self.rollout_wg.switch_to_train()
         else:
             run_start_t = time.perf_counter()
-            output, run_metrics = loop.run_until_complete(self.run(reset_results, rollout_meta_info, env_mode=env_mode))
+            output, last_obs, run_metrics = loop.run_until_complete(
+                self.run(reset_results, rollout_meta_info, env_mode=env_mode)
+            )
             run_s = time.perf_counter() - run_start_t
 
         total_s = time.perf_counter() - total_start_t
@@ -99,7 +103,7 @@ class EnvLoop:
         )
         metrics.update(run_metrics)
         output.meta_info["metrics"] = metrics
-        return output
+        return output, last_obs
 
     async def run(
         self,
@@ -107,8 +111,9 @@ class EnvLoop:
         rollout_meta_info: dict,
         *,
         env_mode: str,
-    ) -> tuple[DataProto, dict[str, float]]:
+    ) -> tuple[DataProto, DataProto, dict[str, float]]:
         trajectories = {i: [] for i in range(self.stage_num)}
+        last_obs_by_stage: dict[int, DataProto] = {}
 
         staged_obs = self._restructure_obs_data(reset_results)
         for stage_id in range(self.stage_num):
@@ -167,6 +172,7 @@ class EnvLoop:
                 current_slot = trajectories[stage_id].pop()
                 current_slot[FEEDBACK_KEY] = next_step
                 trajectories[stage_id].append(current_slot)
+                last_obs_by_stage[stage_id] = next_obs
 
                 stage_timing[stage_id]["effective_steps"] += 1.0
                 step_idx += 1
@@ -195,6 +201,9 @@ class EnvLoop:
         self.env_wg.finish_rollout()
         collated_meta_info = dict(rollout_meta_info)
         output = self._collate_trajectories(trajectories, meta_info=collated_meta_info)
+        last_obs = DataProto.concat(
+            [self._strip_meta_info(last_obs_by_stage[stage_id]) for stage_id in range(self.stage_num)]
+        )
         stage_wall_max_s = max(stage_timing[sid]["stage_wall_s"] for sid in range(self.stage_num))
         rollout_wait_sum_s = sum(stage_timing[sid]["rollout_wait_s"] for sid in range(self.stage_num))
         env_wait_sum_s = sum(stage_timing[sid]["env_wait_s"] for sid in range(self.stage_num))
@@ -214,7 +223,7 @@ class EnvLoop:
             "count/env_loop_env_rpc_calls": env_wait_calls,
             "count/env_loop_rollout_wait_calls": rollout_wait_calls,
         }
-        return output, run_metrics
+        return output, last_obs, run_metrics
 
     def _restructure_obs_data(self, data_proto: DataProto) -> list[DataProto]:
         num_workers = self.env_wg.world_size

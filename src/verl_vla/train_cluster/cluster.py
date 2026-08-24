@@ -384,18 +384,18 @@ class TrainCluster:
         self,
         *,
         async_rollout: bool = False,
-    ) -> tuple[DataProto, dict[str, dict[str, Any]], dict[str, float]]:
+    ) -> tuple[DataProto, DataProto, dict[str, dict[str, Any]], dict[str, float]]:
         if self.cluster_type != "env_loop":
             raise RuntimeError("rollout is only wired for env-loop train clusters.")
         assert self.env_loop is not None
 
         if not async_rollout:
-            output, collected_datasets, metrics, self.rollout_state = self._rollout_once(
+            output, last_obs, collected_datasets, metrics, self.rollout_state = self._rollout_once(
                 self.env_loop,
                 config=self.config,
                 state=self.rollout_state,
             )
-            return output, collected_datasets, metrics
+            return output, last_obs, collected_datasets, metrics
 
         else:
             if not self.config.resource.separate_rollout_model.enabled:
@@ -409,7 +409,7 @@ class TrainCluster:
                 )
 
             assert self._pending_rollout_ref is not None
-            output, collected_datasets, metrics, self.rollout_state = ray.get(self._pending_rollout_ref)
+            output, last_obs, collected_datasets, metrics, self.rollout_state = ray.get(self._pending_rollout_ref)
 
             self.update_weights()
 
@@ -418,7 +418,7 @@ class TrainCluster:
                 self.config,
                 self.rollout_state,
             )
-            return output, collected_datasets, metrics
+            return output, last_obs, collected_datasets, metrics
 
     @staticmethod
     def _rollout_once(
@@ -428,6 +428,7 @@ class TrainCluster:
         state: RolloutState,
     ) -> tuple[
         DataProto,
+        DataProto,
         dict[str, dict[str, Any]],
         dict[str, float],
         RolloutState,
@@ -435,7 +436,7 @@ class TrainCluster:
         reset_future = state.reset_future
         if reset_future is None:
             reset_future = env_loop.env_wg.reset_env()
-        output = env_loop.generate_sequences(reset_future)
+        output, last_obs = env_loop.generate_sequences(reset_future)
         state.reset_future = env_loop.env_wg.reset_env()
         metrics = dict(output.meta_info.pop("metrics", {}))
         trajectory_records = TrainCluster._collect_trajectory_records(
@@ -450,7 +451,7 @@ class TrainCluster:
             lerobot_collected_once=state.lerobot_collected_once,
         )
         state.lerobot_collected_once = lerobot_collected_once
-        return output, collected_datasets, metrics, state
+        return output, last_obs, collected_datasets, metrics, state
 
     @staticmethod
     def _collect_lerobot_datasets(
@@ -566,7 +567,7 @@ class TrainCluster:
         }
         while len(trajectory_records) < target_episodes:
             reset_future = env_wg.reset_env(mode="eval", reset_eval=eval_step == 0)
-            rollout_output = self.env_loop.generate_sequences(reset_future, eval=True)
+            rollout_output, _last_obs = self.env_loop.generate_sequences(reset_future, eval=True)
             for key, value in rollout_output.meta_info.get("metrics", {}).items():
                 rollout_metric_lists.setdefault(key, []).append(float(value))
 

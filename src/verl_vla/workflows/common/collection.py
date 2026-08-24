@@ -48,7 +48,7 @@ def collect_lerobot_rollout_dataset(
     completed_episodes = initial_completed_episodes
     rollout_idx = 0
     while completed_episodes < target_episodes:
-        _rollout_output, collected_datasets, metrics = cluster.rollout()
+        _rollout_output, _last_obs, collected_datasets, metrics = cluster.rollout()
         collected_dataset = collected_datasets.get("collected_dataset")
         if collected_dataset is None:
             active_logger.info(

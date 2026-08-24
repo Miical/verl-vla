@@ -214,7 +214,7 @@ class RobRaySACTrainer:
                     if need_rollout:
                         with marked_timer("rollout", timing_raw):
                             with marked_timer("generate", timing_raw, color="red"):
-                                rollout_output, _collected_datasets, rollout_metrics = self.cluster.rollout(
+                                rollout_output, _last_obs, _collected_datasets, rollout_metrics = self.cluster.rollout(
                                     async_rollout=self.trainer_config.async_rollout,
                                 )
 
