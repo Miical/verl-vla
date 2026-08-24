@@ -26,9 +26,9 @@ from verl_vla.recorder import (
     move_lerobot_dataset_to_output,
     prepare_lerobot_output_root,
 )
-from verl_vla.recorder.collection import collect_lerobot_rollout_dataset
 from verl_vla.train_cluster import TrainCluster
 from verl_vla.utils.ray_utils import ensure_ray_initialized
+from verl_vla.workflows.common.collection import collect_lerobot_rollout_dataset
 
 logger = logging.getLogger(__name__)
 

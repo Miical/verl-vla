@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Helpers for collecting LeRobot datasets from env-loop rollouts."""
+"""Shared workflow orchestration for collecting LeRobot rollout datasets."""
 
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ import logging
 from typing import Any
 
 from verl_vla.recorder.dataset import count_lerobot_episodes, truncate_lerobot_episodes
+from verl_vla.train_cluster import TrainCluster
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ CollectedDatasets = dict[str, dict[str, Any]]
 
 
 def collect_lerobot_rollout_dataset(
-    cluster,
+    cluster: TrainCluster,
     *,
     target_episodes: int,
     initial_completed_episodes: int = 0,
