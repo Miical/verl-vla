@@ -6,5 +6,6 @@
 act/index
 gaussian-actor/index
 gr00t/index
+openvla/index
 pi05/index
 ```
