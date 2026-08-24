@@ -1,0 +1,47 @@
+# Copyright 2026 Bytedance Ltd. and/or its affiliates
+# Licensed under the Apache License, Version 2.0
+
+# Target class for vanilla FPO orchestration settings.
+_target_: verl_vla.trainer.fpo.config.FPOTrainerConfig
+
+# Tracking project name.
+project_name: vla-fpo
+
+# Tracking experiment name.
+experiment_name: libero-spatial
+
+# Tracking backends used by the trainer.
+logger: [console]
+
+# Total number of on-policy collection and update steps.
+total_training_steps: 1000
+
+# Per-environment-step reward discount.
+gamma: 0.995
+
+# GAE trace decay.
+gae_lambda: 0.99
+
+# Penalty subtracted from every action-chunk reward.
+step_penalty: 0.0
+
+# Whether to pipeline rollout with actor updates.
+async_rollout: false
+
+# Checkpoint save interval in global steps.
+save_freq: 50
+
+# Evaluation interval in global steps.
+test_freq: 25
+
+# Number of trajectories in each fixed evaluation.
+eval_episodes: 50
+
+# Whether to evaluate the starting policy before training.
+val_before_train: true
+
+# Whether to stop after the initial evaluation.
+val_only: false
+
+# Extra time budget for preemption-aware checkpointing.
+esi_redundant_time: 0

@@ -31,7 +31,8 @@ from verl.workers.config import HFModelConfig, TrainingWorkerConfig
 from verl.workers.engine_workers import ActorRolloutRefWorker
 from verl.workers.rollout.base import BaseRollout, get_rollout_class
 
-from verl_vla.workers.config import ActorConfig, ActorDataKeysConfig, RolloutConfig, SFTActorConfig
+from verl_vla.workers.config import ActorConfig, ActorDataKeysConfig, FPOActorConfig, RolloutConfig, SFTActorConfig
+from verl_vla.workers.engine.fpo import FPOTrainingWorker
 from verl_vla.workers.engine.sac import SACTrainingWorker
 from verl_vla.workers.engine.sft import SFTTrainingWorker
 from verl_vla.workers.rollout import register_vla_rollouts
@@ -46,6 +47,7 @@ logger.setLevel(os.getenv("VERL_LOGGING_LEVEL", "WARN"))
 
 ACTOR_WORKER_REGISTRY = {
     "verl_vla.workers.config.ActorConfig": (ActorConfig, SACTrainingWorker),
+    "verl_vla.workers.config.FPOActorConfig": (FPOActorConfig, FPOTrainingWorker),
     "verl_vla.workers.config.SFTActorConfig": (SFTActorConfig, SFTTrainingWorker),
 }
 

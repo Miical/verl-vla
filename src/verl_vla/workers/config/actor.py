@@ -29,9 +29,11 @@ __all__ = [
     "SACTD3Config",
     "SACCQLConfig",
     "ACPConfig",
+    "FPOValueConfig",
     "ActorDataKeysConfig",
     "BaseVLAActorConfig",
     "ActorConfig",
+    "FPOActorConfig",
     "SFTActorConfig",
 ]
 
@@ -172,6 +174,23 @@ class ACPConfig(BaseConfig):
 
 
 @dataclass
+class FPOValueConfig(BaseConfig):
+    """Optimizer settings for the vanilla-FPO state-value head."""
+
+    lr: float = 1e-4
+    weight_decay: float = 0.0
+    clip_grad: float = 25.0
+
+    def __post_init__(self):
+        if self.lr <= 0:
+            raise ValueError(f"fpo value lr must be positive, got {self.lr}")
+        if self.weight_decay < 0:
+            raise ValueError(f"fpo value weight_decay must be non-negative, got {self.weight_decay}")
+        if self.clip_grad <= 0:
+            raise ValueError(f"fpo value clip_grad must be positive, got {self.clip_grad}")
+
+
+@dataclass
 class ActorDataKeysConfig(BaseConfig):
     """Batch field names shared by actor training and rollout."""
 
@@ -235,6 +254,47 @@ class ActorConfig(BaseVLAActorConfig):
             raise ValueError(f"mini_batch_size must be positive, got {self.mini_batch_size}")
         if self.micro_batch_size <= 0:
             raise ValueError(f"micro_batch_size must be positive, got {self.micro_batch_size}")
+
+
+@dataclass
+class FPOActorConfig(BaseVLAActorConfig):
+    """Vanilla Flow Policy Optimization actor update configuration."""
+
+    _target_: str = "verl_vla.workers.config.FPOActorConfig"
+
+    value: FPOValueConfig = field(default_factory=FPOValueConfig)
+    mini_batch_size: int = 128
+    micro_batch_size: int = 4
+    update_epochs: int = 2
+    n_action_samples: int = 4
+    clip_coef: float = 0.01
+    vf_coef: float = 1.0
+    normalize_advantages: bool = True
+    value_only_updates: int = 1
+    target_kl: float | None = 0.1
+
+    def __post_init__(self):
+        super().__post_init__()
+        if not isinstance(self.value, FPOValueConfig):
+            from hydra.utils import instantiate
+
+            object.__setattr__(self, "value", instantiate(self.value))
+        if self.mini_batch_size <= 0:
+            raise ValueError(f"fpo mini_batch_size must be positive, got {self.mini_batch_size}")
+        if self.micro_batch_size <= 0:
+            raise ValueError(f"fpo micro_batch_size must be positive, got {self.micro_batch_size}")
+        if self.update_epochs <= 0:
+            raise ValueError(f"fpo update_epochs must be positive, got {self.update_epochs}")
+        if self.n_action_samples <= 0:
+            raise ValueError(f"fpo n_action_samples must be positive, got {self.n_action_samples}")
+        if not 0 < self.clip_coef < 1:
+            raise ValueError(f"fpo clip_coef must be in (0, 1), got {self.clip_coef}")
+        if self.vf_coef < 0:
+            raise ValueError(f"fpo vf_coef must be non-negative, got {self.vf_coef}")
+        if self.value_only_updates < 0:
+            raise ValueError(f"fpo value_only_updates must be non-negative, got {self.value_only_updates}")
+        if self.target_kl is not None and self.target_kl <= 0:
+            raise ValueError(f"fpo target_kl must be positive when provided, got {self.target_kl}")
 
 
 @dataclass

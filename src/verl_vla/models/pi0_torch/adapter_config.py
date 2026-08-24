@@ -61,6 +61,21 @@ class PI0CriticConfig:
         return config
 
 
+class PI0FPOConfig:
+    DEFAULTS = {
+        "enabled": False,
+        "value_input_dim": 2080,
+        "value_hidden_dims": [512, 256],
+    }
+
+    def __init__(self, **values: Any) -> None:
+        for name, value in {**self.DEFAULTS, **values}.items():
+            setattr(self, name, value)
+
+    def to_dict(self) -> dict[str, Any]:
+        return dict(vars(self))
+
+
 class PI0AdapterConfig:
     DEFAULTS = {
         "embodiment": "libero",
@@ -83,6 +98,7 @@ class PI0AdapterConfig:
         **overrides: Any,
     ) -> None:
         critic_values = dict(overrides.pop("critic", {}))
+        fpo_values = dict(overrides.pop("fpo", {}))
         legacy_critic_fields = {
             "sac_enable": "enabled",
             "critic_type": "type",
@@ -103,6 +119,7 @@ class PI0AdapterConfig:
         dsrl_values = {**dict(values.pop("dsrl", {}) or {}), **dsrl_values}
         self.model_path = str(model_path) if model_path is not None else None
         self.critic = PI0CriticConfig(**critic_values)
+        self.fpo = PI0FPOConfig(**fpo_values)
         self.dsrl = DSRLSteeringConfig(**dsrl_values)
         for name, value in values.items():
             setattr(self, name, value)
@@ -117,9 +134,12 @@ class PI0AdapterConfig:
         config = {
             name: value
             for name, value in vars(self).items()
-            if name not in private_runtime_fields and not name.startswith("_") and name not in ("critic", "dsrl")
+            if name not in private_runtime_fields
+            and not name.startswith("_")
+            and name not in ("critic", "fpo", "dsrl")
         }
         config["critic"] = self.critic.to_dict()
+        config["fpo"] = self.fpo.to_dict()
         config["dsrl"] = self.dsrl.to_dict()
         return config
 

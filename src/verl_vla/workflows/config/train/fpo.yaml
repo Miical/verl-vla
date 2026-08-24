@@ -1,0 +1,18 @@
+# Copyright 2026 Bytedance Ltd. and/or its affiliates
+# Licensed under the Apache License, Version 2.0
+
+# Environment-loop vanilla FPO workflow.
+# Hydra configuration composition order.
+defaults:
+
+  # Compose the shared environment-loop actor/rollout cluster.
+  - /cluster@_global_.cluster: env_actor_rollout_cluster
+
+  # Compose vanilla FPO trainer settings.
+  - /trainer@_global_.trainer: fpo_trainer
+
+  # Compose the default Ray runtime settings.
+  - /ray@_global_.ray_kwargs: default
+
+  # Select the FPO training worker for the actor role.
+  - override /actor@_global_.cluster.actor_rollout_ref.actor: fpo_actor

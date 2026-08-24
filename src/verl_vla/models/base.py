@@ -156,6 +156,39 @@ class SupportSACTraining:
         raise NotImplementedError("Subclasses must implement sac_update_target_network method.")
 
 
+class SupportFPOTraining:
+    """Training contract for vanilla Flow Policy Optimization."""
+
+    def fpo_init(self) -> None:
+        raise NotImplementedError("Subclasses must implement fpo_init method.")
+
+    def fpo_cfm_loss(
+        self,
+        obs: DataProto,
+        tokenizer: torch.nn.Module,
+        actions: torch.Tensor,
+        timesteps: torch.Tensor,
+        noise: torch.Tensor,
+    ) -> torch.Tensor:
+        """Return unreduced CFM losses with shape ``[B, action_horizon, samples]``."""
+
+        del obs, tokenizer, actions, timesteps, noise
+        raise NotImplementedError("Subclasses must implement fpo_cfm_loss method.")
+
+    def fpo_forward_value(
+        self,
+        obs: DataProto,
+        tokenizer: torch.nn.Module,
+    ) -> torch.Tensor:
+        """Return state values with shape ``[B]``."""
+
+        del obs, tokenizer
+        raise NotImplementedError("Subclasses must implement fpo_forward_value method.")
+
+    def fpo_get_value_parameters(self) -> list[torch.nn.Parameter]:
+        raise NotImplementedError("Subclasses must implement fpo_get_value_parameters method.")
+
+
 class SupportSFTTraining:
     """
     Base class for models that expose one unified SFT loss interface.

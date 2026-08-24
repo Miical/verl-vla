@@ -34,6 +34,7 @@ vvla-record = "verl_vla.entrypoints.record:main"
 vvla-replay = "verl_vla.entrypoints.replay:main"
 vvla-teleop = "verl_vla.entrypoints.teleop:main"
 vvla-train-recap = "verl_vla.entrypoints.train.recap:main"
+vvla-train-fpo = "verl_vla.entrypoints.train.fpo:main"
 vvla-train-sac = "verl_vla.entrypoints.train.sac:main"
 vvla-train-sft = "verl_vla.entrypoints.train.sft:main"
 

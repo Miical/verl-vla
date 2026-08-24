@@ -12,8 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .adapter_config import PI0AdapterConfig, PI0CriticConfig
+from .adapter_config import PI0AdapterConfig, PI0CriticConfig, PI0FPOConfig
 from .model.modeling_pi0 import PI0Policy
 from .trainable_model import PI0TrainableModel
 
-__all__ = ["PI0AdapterConfig", "PI0CriticConfig", "PI0Policy", "PI0TrainableModel"]
+__all__ = ["PI0AdapterConfig", "PI0CriticConfig", "PI0FPOConfig", "PI0Policy", "PI0TrainableModel"]

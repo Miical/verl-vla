@@ -85,6 +85,18 @@ critic:
     # Output dimension of the CNN observation encoder.
     latent_dim: 50
 
+# Vanilla Flow Policy Optimization auxiliary value head.
+fpo:
+
+  # Whether the PI0 wrapper creates the FPO value head.
+  enabled: false
+
+  # Pooled PI0 prefix width plus normalized state width.
+  value_input_dim: 2080
+
+  # Hidden dimensions of the state-value MLP.
+  value_hidden_dims: [512, 256]
+
 # Whether Flow-SDE is enabled.
 flow_sde_enable: False
 

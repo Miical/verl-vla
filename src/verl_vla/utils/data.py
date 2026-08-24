@@ -231,8 +231,9 @@ def stack_dataproto_with_padding(data_protos: list[DataProto], prefix: str) -> d
     return merged
 
 
-def flatten_trajectories(data: DataProto) -> DataProto:
-    batch_size, num_steps = data.batch["t0.action.action"].shape[:2]
+def flatten_trajectories(data: DataProto, *, reference_key: str = "t0.action.action") -> DataProto:
+    """Flatten the first two trajectory axes using an explicit canonical field."""
+    batch_size, num_steps = data.batch[reference_key].shape[:2]
     new_batch_fields = {}
     new_non_tensor_fields = {}
 

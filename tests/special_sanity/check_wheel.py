@@ -23,12 +23,12 @@ EXPECTED_CONFIG_FILES = (
     "record",
     "replay",
     "teleop",
-    "train/ppo",
+    "train/fpo",
     "train/recap",
     "train/sac",
     "train/sft",
 )
-SELF_CONTAINED_CONFIGS = tuple(config for config in EXPECTED_CONFIG_FILES if config != "train/ppo")
+SELF_CONTAINED_CONFIGS = EXPECTED_CONFIG_FILES
 EXPECTED_ENTRY_POINTS = {
     "vvla-dagger",
     "vvla-eval",
@@ -36,6 +36,7 @@ EXPECTED_ENTRY_POINTS = {
     "vvla-replay",
     "vvla-teleop",
     "vvla-train-recap",
+    "vvla-train-fpo",
     "vvla-train-sac",
     "vvla-train-sft",
 }

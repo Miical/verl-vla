@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from .engine_workers import VLAActorRolloutRefWorker, VLAActorWorker, VLARolloutWorker
+from .fpo import FPOTrainingWorker
 from .fsdp import VLAFSDPEngine
 from .sac import SACTrainingWorker
 from .sft import SFTTrainingWorker
@@ -22,6 +23,7 @@ __all__ = [
     "VLAActorWorker",
     "VLARolloutWorker",
     "SACTrainingWorker",
+    "FPOTrainingWorker",
     "SFTTrainingWorker",
     "VLAFSDPEngine",
 ]

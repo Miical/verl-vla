@@ -19,7 +19,7 @@ from hydra import compose, initialize_config_module
 @pytest.mark.parametrize(
     ("config_module", "config_name", "required_keys"),
     [
-        ("verl_vla.workflows.config.train", "ppo", {"actor_rollout_ref", "env", "trainer"}),
+        ("verl_vla.workflows.config", "train/fpo", {"cluster", "ray_kwargs", "trainer"}),
         ("verl_vla.workflows.config", "train/recap", {"ray_kwargs", "recap"}),
         ("verl_vla.workflows.config", "train/sac", {"cluster", "ray_kwargs", "trainer"}),
         ("verl_vla.workflows.config", "train/sft", {"cluster", "data", "ray_kwargs", "trainer"}),

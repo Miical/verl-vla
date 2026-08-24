@@ -46,6 +46,7 @@ class Pi0Input(ABC):
 class Pi0Output:
     def __init__(self):
         self.action: torch.Tensor = None
+        self.full_action: torch.Tensor = None
         self.log_prob: torch.Tensor = None
         self.steering_noise: torch.Tensor = None
 
@@ -55,6 +56,8 @@ class Pi0Output:
 
     def to_data_proto(self) -> DataProto:
         tensor_batch = {"action": self.action}
+        if self.full_action is not None:
+            tensor_batch["full_action"] = self.full_action
         if self.log_prob is not None:
             tensor_batch["log_prob"] = self.log_prob
         if self.steering_noise is not None:

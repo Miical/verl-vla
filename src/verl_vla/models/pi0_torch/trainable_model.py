@@ -30,7 +30,7 @@ from typing_extensions import override
 from verl.protocol import DataProto
 from verl.utils.device import get_device_name
 
-from ..base import ModelOutput, SupportSACTraining, SupportSFTTraining, TrainableVLAModelBase
+from ..base import ModelOutput, SupportFPOTraining, SupportSACTraining, SupportSFTTraining, TrainableVLAModelBase
 from ..dsrl import DSRLSteering
 from .adapter_config import PI0AdapterConfig
 from .critic import (
@@ -48,6 +48,7 @@ from .pi0_utils import (
     PromptTokenizerTransform,
     Unnormalize,
 )
+from .value_head import PI0FPOValueHead
 
 CRITIC_BACKENDS = {
     "cnn": PI0CNNCriticBackend(),
@@ -82,6 +83,7 @@ def load_pi0_norm_stats(path: str | os.PathLike[str]) -> tuple[dict, dict]:
 
 class PI0TrainableModel(
     TrainableVLAModelBase,
+    SupportFPOTraining,
     SupportSACTraining,
     SupportSFTTraining,
 ):
@@ -128,6 +130,13 @@ class PI0TrainableModel(
         assert self.state_norm_stats, "state_norm_stats must be provided for the PI0 adapter"
         assert self.action_norm_stats, "action_norm_stats must be provided for the PI0 adapter"
         assert isinstance(self.pi05_enabled, bool), "pi05_enabled must be provided by the native PI0 policy config"
+
+        self.fpo_value_head = None
+        if config.fpo.enabled:
+            self.fpo_value_head = PI0FPOValueHead(
+                input_dim=int(config.fpo.value_input_dim),
+                hidden_dims=[int(dim) for dim in config.fpo.value_hidden_dims],
+            )
 
         # Input transforms
         self.state_normalize_transform = Normalize(self.state_norm_stats, use_quantiles=self.pi05_enabled)
@@ -286,13 +295,15 @@ class PI0TrainableModel(
             rollout_log_probs = flow_log_probs
 
         # Output transforms
+        full_action = self.action_unnormalize_transform(pred_action)
         pi0_output = pi0_output_cls.from_model_output(
             {
-                "full_action": self.action_unnormalize_transform(pred_action),
+                "full_action": full_action,
                 "log_probs": rollout_log_probs,
                 "action_chunk_size": self.action_chunk_size,
             }
         )
+        pi0_output.full_action = full_action
         if steering_noise is not None:
             pi0_output.steering_noise = steering_noise.detach().float()
 
@@ -488,6 +499,114 @@ class PI0TrainableModel(
 
         sample_loss = (loss * action_mask).sum(dim=-1) / action_mask.sum(dim=-1).clamp_min(1.0)
         return (sample_loss * valids).sum() / valids.sum().clamp_min(1.0)
+
+    # --- Vanilla FPO Algorithm Support ---
+
+    @override
+    def fpo_init(self) -> None:
+        if self.fpo_value_head is None:
+            raise RuntimeError("FPO requires adapter.fpo.enabled=true.")
+        if self.dsrl is not None:
+            raise ValueError("FPO and DSRL noise steering cannot be enabled together.")
+        self.freeze_vision_tower()
+        register_fsdp_forward_method(self, "fpo_cfm_loss")
+        register_fsdp_forward_method(self, "fpo_forward_value")
+
+    def _fpo_policy_inputs(self, obs: DataProto, tokenizer: torch.nn.Module):
+        pi0_input_cls, _ = self._get_pi0_embodiment_classes()
+        with torch.no_grad():
+            pi0_input = pi0_input_cls.from_env_obs(obs)
+            states = self.state_normalize_transform(pi0_input.state)
+            images, _ = self.image_transform.call_batch(pi0_input.images)
+            lang_tokens, lang_masks = self.prompt_tokenizer_transform.call_batch(
+                {"task": pi0_input.task, "observation.state": states}, tokenizer
+            )
+        return states, images, pi0_input.img_masks, lang_tokens, lang_masks
+
+    @override
+    def fpo_cfm_loss(
+        self,
+        obs: DataProto,
+        tokenizer: torch.nn.Module,
+        actions: torch.Tensor,
+        timesteps: torch.Tensor,
+        noise: torch.Tensor,
+    ) -> torch.Tensor:
+        if timesteps.ndim != 2:
+            raise ValueError(f"FPO timesteps must have shape [B, N], got {tuple(timesteps.shape)}.")
+        if noise.ndim != 4:
+            raise ValueError(f"FPO noise must have shape [B, N, H, D], got {tuple(noise.shape)}.")
+        batch_size, n_action_samples = timesteps.shape
+        if actions.shape[0] != batch_size or noise.shape[:2] != (batch_size, n_action_samples):
+            raise ValueError("FPO actions, timesteps, and noise batch dimensions must match.")
+
+        action_horizon = self.policy.n_action_steps
+        action_tensor = actions[:, :action_horizon, : self.policy.max_action_dim]
+        if action_tensor.shape[1] != action_horizon or action_tensor.shape[2] != self.policy.max_action_dim:
+            raise ValueError(
+                "FPO requires the full native action sample with shape "
+                f"[B, {action_horizon}, {self.policy.max_action_dim}], got {tuple(actions.shape)}."
+            )
+        action_tensor = self.action_normalize_transform(action_tensor)
+        if noise.shape[2:] != action_tensor.shape[1:]:
+            raise ValueError(
+                f"FPO noise tail shape {tuple(noise.shape[2:])} does not match "
+                f"actions {tuple(action_tensor.shape[1:])}."
+            )
+
+        states, images, img_masks, lang_tokens, lang_masks = self._fpo_policy_inputs(obs, tokenizer)
+
+        def repeat_samples(tensor: torch.Tensor) -> torch.Tensor:
+            return (
+                tensor.unsqueeze(1)
+                .expand(-1, n_action_samples, *tensor.shape[1:])
+                .reshape(batch_size * n_action_samples, *tensor.shape[1:])
+            )
+
+        repeated_actions = repeat_samples(action_tensor)
+        repeated_states = repeat_samples(states)
+        repeated_images = [repeat_samples(image) for image in images]
+        repeated_img_masks = [repeat_samples(mask) for mask in img_masks]
+        repeated_lang_tokens = repeat_samples(lang_tokens)
+        repeated_lang_masks = repeat_samples(lang_masks)
+        repeated_timesteps = timesteps.reshape(-1).to(device=actions.device, dtype=torch.float32)
+        repeated_noise = noise.reshape(batch_size * n_action_samples, *noise.shape[2:]).to(
+            device=actions.device, dtype=repeated_actions.dtype
+        )
+
+        time = repeated_timesteps[:, None, None]
+        x_t = time * repeated_noise + (1.0 - time) * repeated_actions
+        target_velocity = repeated_noise - repeated_actions
+        predicted_velocity = self.policy(
+            repeated_images,
+            repeated_img_masks,
+            repeated_lang_tokens,
+            repeated_lang_masks,
+            repeated_states,
+            x_t,
+            repeated_timesteps,
+        )
+        per_action_loss = F.mse_loss(target_velocity, predicted_velocity, reduction="none").mean(dim=-1)
+        return per_action_loss.reshape(batch_size, n_action_samples, action_horizon).permute(0, 2, 1)
+
+    @override
+    def fpo_forward_value(
+        self,
+        obs: DataProto,
+        tokenizer: torch.nn.Module,
+    ) -> torch.Tensor:
+        if self.fpo_value_head is None:
+            raise RuntimeError("FPO requires adapter.fpo.enabled=true.")
+        states, images, img_masks, lang_tokens, lang_masks = self._fpo_policy_inputs(obs, tokenizer)
+        with torch.no_grad():
+            prefix_features = self.policy.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        return self.fpo_value_head((prefix_features, states)).float()
+
+    @override
+    def fpo_get_value_parameters(self) -> list[torch.nn.Parameter]:
+        if self.fpo_value_head is None:
+            raise RuntimeError("FPO requires adapter.fpo.enabled=true.")
+        return list(self.fpo_value_head.parameters())
 
     # --- SAC Algorithm Support ---
 
