@@ -120,6 +120,7 @@ class TrainCluster:
         self.checkpoint_engine_manager: CheckpointEngineManager | None = None
         self.rollout_state = RolloutState()
         self._pending_rollout_ref: ray.ObjectRef | None = None
+        self._ready_rollout_result = None
 
     def start(self) -> None:
         self._build_resource_pool_plan()
@@ -165,6 +166,7 @@ class TrainCluster:
             except Exception:
                 pass
             self._pending_rollout_ref = None
+        self._ready_rollout_result = None
 
         seen_actor_ids: set[str] = set()
         for worker_group in self.worker_groups.values():
@@ -405,15 +407,22 @@ class TrainCluster:
             if not self.config.resource.separate_rollout_model.enabled:
                 raise ValueError("async_rollout requires separate actor and rollout workers.")
 
-            if self._pending_rollout_ref is None:
-                self._pending_rollout_ref = ray_rollout_once.remote(
-                    self.env_loop,
-                    self.config,
-                    self.rollout_state,
-                )
+            if self._ready_rollout_result is not None:
+                result = self._ready_rollout_result
+                self._ready_rollout_result = None
+            else:
+                if self._pending_rollout_ref is None:
+                    self._pending_rollout_ref = ray_rollout_once.remote(
+                        self.env_loop,
+                        self.config,
+                        self.rollout_state,
+                    )
 
-            assert self._pending_rollout_ref is not None
-            output, last_obs, collected_datasets, metrics, self.rollout_state = ray.get(self._pending_rollout_ref)
+                assert self._pending_rollout_ref is not None
+                result = ray.get(self._pending_rollout_ref)
+                self._pending_rollout_ref = None
+
+            output, last_obs, collected_datasets, metrics, self.rollout_state = result
 
             self.update_weights()
 
@@ -552,6 +561,17 @@ class TrainCluster:
         if self.cluster_type != "env_loop":
             raise RuntimeError("eval is only wired for env-loop train clusters.")
 
+        # Evaluation is a policy boundary: it must observe the actor state
+        # produced by the most recent update, not the last rollout snapshot.
+        # Finish any in-flight training rollout before mutating rollout-worker
+        # weights. Keep the complete result so the next training call consumes
+        # the already-collected batch instead of collecting it again.
+        if self._pending_rollout_ref is not None:
+            self._ready_rollout_result = ray.get(self._pending_rollout_ref)
+            self.rollout_state = self._ready_rollout_result[-1]
+            self._pending_rollout_ref = None
+        self.update_weights()
+
         env_wg = self.worker_groups[ROLE_TO_WORKER_NAME[Role.Env]]
         benchmark_size = int(env_wg.get_eval_benchmark_size()[0])
         target_episodes = benchmark_size if max_episodes is None else int(max_episodes)
@@ -651,8 +671,15 @@ class TrainCluster:
         if carry_lengths is None:
             carry_lengths = np.zeros(batch_size, dtype=np.int64)
             carry_rewards = np.zeros(batch_size, dtype=np.float32)
-            carry_state["length"] = carry_lengths
-            carry_state["reward"] = carry_rewards
+        else:
+            # Ray deserializes NumPy arrays from the object store as read-only
+            # views. Rollout state is returned by one async task and consumed by
+            # the next, so take ownership before extending partial trajectories.
+            assert carry_rewards is not None
+            carry_lengths = carry_lengths.copy()
+            carry_rewards = carry_rewards.copy()
+        carry_state["length"] = carry_lengths
+        carry_state["reward"] = carry_rewards
         assert carry_lengths is not None
         assert carry_rewards is not None
 
