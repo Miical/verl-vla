@@ -508,6 +508,8 @@ class PI0TrainableModel(
             raise RuntimeError("FPO requires adapter.fpo.enabled=true.")
         if self.dsrl is not None:
             raise ValueError("FPO and DSRL noise steering cannot be enabled together.")
+        if not self.policy.use_cache:
+            raise ValueError("FPO requires the PI0 prefix KV cache (model use_cache=true).")
         self.freeze_vision_tower()
         register_fsdp_forward_method(self, "fpo_cfm_loss")
         register_fsdp_forward_method(self, "fpo_forward_value")
@@ -565,10 +567,6 @@ class PI0TrainableModel(
 
         repeated_actions = repeat_samples(action_tensor)
         repeated_states = repeat_samples(states)
-        repeated_images = [repeat_samples(image) for image in images]
-        repeated_img_masks = [repeat_samples(mask) for mask in img_masks]
-        repeated_lang_tokens = repeat_samples(lang_tokens)
-        repeated_lang_masks = repeat_samples(lang_masks)
         repeated_timesteps = timesteps.reshape(-1).to(device=actions.device, dtype=torch.float32)
         repeated_noise = noise.reshape(batch_size * n_action_samples, *noise.shape[2:]).to(
             device=actions.device, dtype=repeated_actions.dtype
@@ -577,16 +575,41 @@ class PI0TrainableModel(
         time = repeated_timesteps[:, None, None]
         x_t = time * repeated_noise + (1.0 - time) * repeated_actions
         target_velocity = repeated_noise - repeated_actions
-        predicted_velocity = self.policy(
-            repeated_images,
-            repeated_img_masks,
-            repeated_lang_tokens,
-            repeated_lang_masks,
+        # The image/language prefix is independent of the sampled CFM time and
+        # noise. Build its differentiable KV cache once per observation, then
+        # share it across the N action samples. This preserves gradients into
+        # the trainable PaliGemma prefix while avoiding N identical prefix
+        # forwards per rollout slot.
+        prefix_features = self.policy.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        _, prefix_pad_masks, _ = prefix_features
+        past_key_values = self._build_kv_cache_from_prefix(prefix_features)
+        repeated_past_key_values = {
+            layer_idx: {name: repeat_samples(value) for name, value in layer_cache.items()}
+            for layer_idx, layer_cache in past_key_values.items()
+        }
+        predicted_velocity = self.policy.denoise_step(
             repeated_states,
+            repeat_samples(prefix_pad_masks),
+            repeated_past_key_values,
             x_t,
             repeated_timesteps,
         )
-        per_action_loss = F.mse_loss(target_velocity, predicted_velocity, reduction="none").mean(dim=-1)
+        # PI0 pads every embodiment to ``max_action_dim``, but only dimensions
+        # covered by the checkpoint's action statistics belong to the action
+        # executed by the environment.  Padding dimensions are latent model
+        # plumbing, not part of the behavior-policy ratio used by FPO.
+        action_stats = self.action_norm_stats["q01" if self.pi05_enabled else "mean"]
+        action_dim = len(action_stats)
+        if action_dim > self.policy.max_action_dim:
+            raise ValueError(
+                f"FPO action statistics define {action_dim} dimensions, exceeding the policy maximum "
+                f"of {self.policy.max_action_dim}."
+            )
+        per_action_loss = F.mse_loss(
+            target_velocity[..., :action_dim],
+            predicted_velocity[..., :action_dim],
+            reduction="none",
+        ).mean(dim=-1)
         return per_action_loss.reshape(batch_size, n_action_samples, action_horizon).permute(0, 2, 1)
 
     @override
@@ -683,7 +706,8 @@ class PI0TrainableModel(
             task_ids=task_ids,
         )
 
-        past_key_values = self._build_kv_cache_from_prefix(prefix_features)
+        with torch.set_grad_enabled(requires_grad):
+            past_key_values = self._build_kv_cache_from_prefix(prefix_features)
         x_t = initial_noise.to(device=device, dtype=prefix_embs.dtype)
 
         timesteps = torch.linspace(1.0, 0.0, self.policy.num_steps + 1, dtype=torch.float32, device=device)
@@ -752,21 +776,20 @@ class PI0TrainableModel(
         self,
         prefix_features: tuple[torch.Tensor, torch.Tensor, torch.Tensor],
     ):
-        """Build KV cache for prefix. No grad needed."""
+        """Build a prefix KV cache under the caller's gradient context."""
         prefix_embs, prefix_pad_masks, prefix_att_masks = prefix_features
         prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
         prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
 
-        with torch.no_grad():
-            _, past_key_values = self.policy.paligemma_with_expert.forward(
-                attention_mask=prefix_att_2d_masks,
-                position_ids=prefix_position_ids,
-                past_key_values=None,
-                inputs_embeds=[prefix_embs, None],
-                use_cache=self.policy.use_cache,
-                fill_kv_cache=True,
-                adarms_cond=[None, None],
-            )
+        _, past_key_values = self.policy.paligemma_with_expert.forward(
+            attention_mask=prefix_att_2d_masks,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=self.policy.use_cache,
+            fill_kv_cache=True,
+            adarms_cond=[None, None],
+        )
         return past_key_values
 
     @override
