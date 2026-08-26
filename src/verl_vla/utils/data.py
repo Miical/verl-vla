@@ -86,12 +86,16 @@ def update_progress_trajectory_counts(
     )
     previous_done = state["done"]
     carried_success = state["success"]
+    completed_this_chunk = torch.zeros_like(previous_done)
 
     for step_idx in range(episode_done.shape[1]):
         step_done = episode_done[:, step_idx]
         step_success = success[:, step_idx]
 
-        active = ~previous_done
+        # BaseEnv resets a completed lane only after the whole action chunk has
+        # finished.  A done signal that falls and rises again inside the same
+        # chunk therefore still belongs to the already completed episode.
+        active = ~previous_done & ~completed_this_chunk
         carried_success[active] |= step_success[active]
 
         newly_done = active & step_done
@@ -99,11 +103,12 @@ def update_progress_trajectory_counts(
         progress_counts["succ_eps"] += int((newly_done & carried_success).sum().item())
 
         previous_done[newly_done] = True
+        completed_this_chunk |= newly_done
         carried_success[newly_done] = False
 
         resumed = previous_done & ~step_done
         previous_done[resumed] = False
-        carried_success[resumed] = step_success[resumed]
+        carried_success[resumed] = False
 
 
 def dataloader_batch_to_dataproto(batch: dict) -> DataProto:

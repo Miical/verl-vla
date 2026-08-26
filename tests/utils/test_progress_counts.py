@@ -62,6 +62,22 @@ def test_progress_ignores_success_after_first_done_in_chunk():
     assert progress_counts == {"done_eps": 1, "succ_eps": 0}
 
 
+def test_progress_does_not_count_second_done_rising_edge_before_chunk_reset():
+    progress_counts = {"done_eps": 0, "succ_eps": 0}
+
+    update_progress_trajectory_counts(
+        _make_env_result(
+            [[False, True, False, True]],
+            success=[[False, True, False, True]],
+        ),
+        stage_id=0,
+        progress_counts=progress_counts,
+        progress_lane_state={},
+    )
+
+    assert progress_counts == {"done_eps": 1, "succ_eps": 1}
+
+
 def test_progress_counts_only_done_rising_edges_across_chunks():
     progress_counts = {"done_eps": 0, "succ_eps": 0}
     progress_lane_state = {}
