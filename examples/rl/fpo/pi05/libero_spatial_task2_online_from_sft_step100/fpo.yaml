@@ -1,0 +1,91 @@
+hydra:
+  searchpath:
+    - pkg://verl_vla.workflows.config
+
+defaults:
+  - /train/fpo@_global_
+  - override /model/adapter@cluster.actor_rollout_ref.model.adapter: pi0
+  - _self_
+
+output_dir: ???
+
+cluster:
+  env:
+    env_loop:
+      pipeline_stage_num: 2
+      max_interactions: 20
+    env_worker:
+      auto_reset: true
+      modes: [train, eval]
+      simulator:
+        libero:
+          task_suite_name: libero_spatial
+          task_ids: [2]
+          max_episode_steps: 200
+      recorder:
+        enable: false
+
+  actor_rollout_ref:
+    model:
+      adapter:
+        embodiment: libero
+        action_chunk_size: 10
+        critic:
+          enabled: false
+        fpo:
+          enabled: true
+          value_input_dim: 2080
+          value_hidden_dims: [512, 256]
+        dsrl:
+          enabled: false
+        flow_sde_enable: false
+
+    actor:
+      mini_batch_size: 128
+      micro_batch_size: 4
+      update_epochs: 2
+      n_action_samples: 4
+      clip_coef: 0.01
+      value_only_updates: 1
+      target_kl: 0.1
+      optim:
+        lr: 1e-5
+        betas: [0.9, 0.99]
+        weight_decay: 0.0
+        clip_grad: 25.0
+        lr_scheduler_type: constant
+      value:
+        lr: 1e-4
+        weight_decay: 0.0
+        clip_grad: 25.0
+
+    rollout:
+      mode: async_envloop
+      prompt_length: 512
+      free_cache_engine: false
+      output_critic_value: false
+
+  checkpoint:
+    resume_mode: auto
+    default_local_dir: ${output_dir}/checkpoints
+
+ray_kwargs:
+  ray_init:
+    runtime_env:
+      env_vars:
+        MUJOCO_GL: osmesa
+        PYTHONPATH: ${oc.env:PYTHONPATH,""}
+        TENSORBOARD_DIR: ???
+
+trainer:
+  project_name: verl-vla
+  experiment_name: pi05-libero-spatial-task2-fpo
+  logger: [console, tensorboard]
+  total_training_steps: 50
+  gamma: 0.995
+  gae_lambda: 0.99
+  async_rollout: false
+  save_freq: 5
+  test_freq: 5
+  eval_episodes: 50
+  val_before_train: true

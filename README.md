@@ -96,7 +96,7 @@ reference results recorded for validated experiments.
 | --- | --- |
 | Models | ACT, Gaussian Actor, Pi0.5, and GR00T N1.6 |
 | Environments and robots | LIBERO, Isaac Lab Arena, and Piper |
-| Training | SFT, SAC-style off-policy training, TD3+BC, DSRL, and RECAP |
+| Training | SFT, SAC-style off-policy training, TD3+BC, FPO, DSRL, and RECAP |
 | Human input | Keyboard, gamepad, and XR controller |
 
 Model adapters preserve upstream-native implementations and Hugging Face
@@ -132,6 +132,7 @@ fine-tuning and reinforcement learning.
 | --- | --- |
 | SAC | [ACT on LIBERO Spatial task 0](https://github.com/verl-project/verl-vla/tree/main/examples/rl/sac/act) · [GR00T N1.6 on the Arena GR1 fridge task](https://github.com/verl-project/verl-vla/tree/main/examples/rl/sac/gr00t) · [GR00T N1.6 on Arena LIBERO](https://github.com/verl-project/verl-vla/tree/main/examples/rl/sac/gr00t) |
 | TD3+BC | [Gaussian Actor on LIBERO Spatial task 0](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/td3-bc/gaussian-actor/libero-spatial.html) · [Pi0.5 on LIBERO Spatial task 2](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/td3-bc/pi05/libero-spatial.html) |
+| FPO | [Pi0.5 on LIBERO Spatial task 2](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/fpo/pi05/libero-spatial.html) |
 | DSRL | [Pi0.5 on LIBERO Spatial tasks 9 and 2](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/dsrl/pi05/libero-spatial.html) · [GR00T N1.6 on all 10 Arena LIBERO Spatial tasks](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/dsrl/gr00t/arena-libero-spatial.html) |
 | RECAP | [Pi0.5 on LIBERO-10 task 8](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/recap/pi05/libero10-task8.html) · [GR00T N1.6 on the Arena GR1 fridge task](https://verl-vla.readthedocs.io/en/latest/reinforcement-learning/recap/gr00t/arena-gr1.html) |
 
