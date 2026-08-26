@@ -10,6 +10,7 @@ from collections import defaultdict
 from pathlib import Path
 
 import torch
+from tqdm import tqdm
 from verl import DataProto
 from verl.single_controller.base.decorator import Dispatch, make_nd_compute_dataproto_dispatch_fn, register
 from verl.utils.device import get_device_id, get_device_name
@@ -57,6 +58,32 @@ def clipped_policy_loss(
         approx_kl = (((ratio - 1.0) - log_ratio) * valids).sum() / valid_count
         clip_fraction = (((ratio - 1.0).abs() > clip_coef).float() * valids).sum() / valid_count
     return loss, {"ratio": ratio.detach(), "approx_kl": approx_kl, "clip_fraction": clip_fraction}
+
+
+def distributed_explained_variance(
+    returns: torch.Tensor,
+    predictions: torch.Tensor,
+    valids: torch.Tensor,
+) -> torch.Tensor:
+    """Compute explained variance from rollout-wide sufficient statistics."""
+    valid_returns = returns * valids
+    residuals = (returns - predictions) * valids
+    stats = torch.stack(
+        [
+            valid_returns.sum(),
+            valid_returns.square().sum(),
+            residuals.sum(),
+            residuals.square().sum(),
+            valids.sum(),
+        ]
+    )
+    torch.distributed.all_reduce(stats, op=torch.distributed.ReduceOp.SUM)
+    count = stats[4].clamp_min(1.0)
+    return_mean = stats[0] / count
+    return_variance = stats[1] / count - return_mean.square()
+    residual_mean = stats[2] / count
+    residual_variance = stats[3] / count - residual_mean.square()
+    return 1.0 - residual_variance / return_variance.clamp_min(1e-8)
 
 
 class FPOTrainingWorker(TrainingWorker):
@@ -130,6 +157,7 @@ class FPOTrainingWorker(TrainingWorker):
 
     @staticmethod
     def _global_normalize(values: torch.Tensor, valids: torch.Tensor) -> torch.Tensor:
+        valids = valids.to(device=values.device, dtype=values.dtype)
         valid_values = values * valids
         stats = torch.stack([(valid_values).sum(), (valid_values.square()).sum(), valids.sum()])
         torch.distributed.all_reduce(stats, op=torch.distributed.ReduceOp.SUM)
@@ -193,9 +221,6 @@ class FPOTrainingWorker(TrainingWorker):
             gae_discounts=data.batch["info.gae_discounts"].to(device),
             valids=valids,
         )
-        if self.actor_config.normalize_advantages:
-            advantages = self._global_normalize(advantages, valids)
-
         data.batch["fpo.old_values"] = old_values
         data.batch["fpo.old_cfm_loss"] = old_cfm_loss
         data.batch["fpo.advantages"] = advantages
@@ -213,67 +238,95 @@ class FPOTrainingWorker(TrainingWorker):
         value_only = int(data.meta_info["global_steps"]) <= self.actor_config.value_only_updates
         metric_lists: dict[str, list[float]] = defaultdict(list)
         epochs_run = 0
+        mini_batches_per_epoch = (len(data) + self.local_mini_batch_size - 1) // self.local_mini_batch_size
+        update_progress = tqdm(
+            total=self.actor_config.update_epochs * mini_batches_per_epoch,
+            desc="FPO update",
+            disable=torch.distributed.get_rank() != 0,
+            leave=False,
+        )
 
         for _epoch in range(self.actor_config.update_epochs):
             permutation = torch.randperm(len(data))
             epoch_kls = []
-            for start in range(0, len(data), self.local_mini_batch_size):
+            for mini_batch_index, start in enumerate(range(0, len(data), self.local_mini_batch_size)):
+                update_progress.set_postfix(
+                    epoch=f"{_epoch + 1}/{self.actor_config.update_epochs}",
+                    minibatch=f"{mini_batch_index + 1}/{mini_batches_per_epoch}",
+                    value_only=value_only,
+                )
                 indices = permutation[start : start + self.local_mini_batch_size]
                 mini_batch = data.select_idxs(indices)
+                # Match vanilla FPO/PPO: normalize over the current global
+                # minibatch after shuffling, not once over the whole rollout.
+                # Each rank contributes its local shard to these statistics.
+                if self.actor_config.normalize_advantages:
+                    mini_batch.batch["fpo.advantages"] = self._global_normalize(
+                        mini_batch.batch["fpo.advantages"],
+                        mini_batch.batch["info.valids"].float(),
+                    )
                 micro_batches = mini_batch.split(self.actor_config.micro_batch_size)
                 grad_accum_steps = len(micro_batches)
                 self.engine.optimizer_zero_grad()
                 self.value_optimizer.zero_grad()
 
-                for micro_batch in micro_batches:
-                    micro_batch = micro_batch.to(get_device_id())
-                    obs = get_dataproto_from_prefix(micro_batch, "obs.")
-                    valids = micro_batch.batch["info.valids"].float()
-                    with torch.autocast(device_type=get_device_name(), dtype=torch.bfloat16):
-                        values = self.engine.module.fpo_forward_value(obs, self.tokenizer)
-                        value_loss = (
-                            0.5
-                            * ((values - micro_batch.batch["fpo.returns"]).square() * valids).sum()
-                            / valids.sum().clamp_min(1.0)
-                        )
+                try:
+                    for micro_batch_index, micro_batch in enumerate(micro_batches):
+                        sync_gradients = micro_batch_index == grad_accum_steps - 1
+                        self.engine.module.set_requires_gradient_sync(sync_gradients)
+                        self.engine.module.set_is_last_backward(sync_gradients)
 
-                        if value_only:
-                            policy_loss = values.new_zeros(())
-                            policy_metrics = {
-                                "ratio": torch.ones_like(values),
-                                "approx_kl": values.new_zeros(()),
-                                "clip_fraction": values.new_zeros(()),
-                            }
-                        else:
-                            current_cfm_loss = self.engine.module.fpo_cfm_loss(
-                                obs,
-                                self.tokenizer,
-                                micro_batch.batch["action.full_action"],
-                                micro_batch.batch["fpo.timesteps"],
-                                micro_batch.batch["fpo.noise"],
-                            )
-                            action_valids = micro_batch.batch["info.action_valids"].unsqueeze(-1)
-                            log_ratio = (
-                                ((micro_batch.batch["fpo.old_cfm_loss"] - current_cfm_loss) * action_valids)
-                                .sum(dim=1)
-                                .mean(dim=-1)
-                            )
-                            policy_loss, policy_metrics = clipped_policy_loss(
-                                log_ratio,
-                                micro_batch.batch["fpo.advantages"],
-                                valids,
-                                self.actor_config.clip_coef,
+                        micro_batch = micro_batch.to(get_device_id())
+                        obs = get_dataproto_from_prefix(micro_batch, "obs.")
+                        valids = micro_batch.batch["info.valids"].float()
+                        with torch.autocast(device_type=get_device_name(), dtype=torch.bfloat16):
+                            values = self.engine.module.fpo_forward_value(obs, self.tokenizer)
+                            value_loss = (
+                                0.5
+                                * ((values - micro_batch.batch["fpo.returns"]).square() * valids).sum()
+                                / valids.sum().clamp_min(1.0)
                             )
 
-                        loss = policy_loss + self.actor_config.vf_coef * value_loss
-                    (loss / grad_accum_steps).backward()
+                            if value_only:
+                                policy_loss = values.new_zeros(())
+                                policy_metrics = {
+                                    "ratio": torch.ones_like(values),
+                                    "approx_kl": values.new_zeros(()),
+                                    "clip_fraction": values.new_zeros(()),
+                                }
+                            else:
+                                current_cfm_loss = self.engine.module.fpo_cfm_loss(
+                                    obs,
+                                    self.tokenizer,
+                                    micro_batch.batch["action.full_action"],
+                                    micro_batch.batch["fpo.timesteps"],
+                                    micro_batch.batch["fpo.noise"],
+                                )
+                                action_valids = micro_batch.batch["info.action_valids"].unsqueeze(-1)
+                                log_ratio = (
+                                    ((micro_batch.batch["fpo.old_cfm_loss"] - current_cfm_loss) * action_valids)
+                                    .sum(dim=1)
+                                    .mean(dim=-1)
+                                )
+                                policy_loss, policy_metrics = clipped_policy_loss(
+                                    log_ratio,
+                                    micro_batch.batch["fpo.advantages"],
+                                    valids,
+                                    self.actor_config.clip_coef,
+                                )
 
-                    metric_lists["actor/loss"].append(float(policy_loss.detach()))
-                    metric_lists["value/loss"].append(float(value_loss.detach()))
-                    metric_lists["fpo/approx_kl"].append(float(policy_metrics["approx_kl"]))
-                    metric_lists["fpo/clip_fraction"].append(float(policy_metrics["clip_fraction"]))
-                    metric_lists["fpo/ratio_mean"].append(float(policy_metrics["ratio"].mean()))
-                    epoch_kls.append(float(policy_metrics["approx_kl"]))
+                            loss = policy_loss + self.actor_config.vf_coef * value_loss
+                        (loss / grad_accum_steps).backward()
+
+                        metric_lists["actor/loss"].append(float(policy_loss.detach()))
+                        metric_lists["value/loss"].append(float(value_loss.detach()))
+                        metric_lists["fpo/approx_kl"].append(float(policy_metrics["approx_kl"]))
+                        metric_lists["fpo/clip_fraction"].append(float(policy_metrics["clip_fraction"]))
+                        metric_lists["fpo/ratio_mean"].append(float(policy_metrics["ratio"].mean()))
+                        epoch_kls.append(float(policy_metrics["approx_kl"]))
+                finally:
+                    self.engine.module.set_requires_gradient_sync(True)
+                    self.engine.module.set_is_last_backward(True)
 
                 value_grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.value_parameters, max_norm=self.actor_config.value.clip_grad
@@ -288,22 +341,21 @@ class FPOTrainingWorker(TrainingWorker):
                     self.engine.lr_scheduler_step()
                     metric_lists["actor/grad_norm"].append(float(actor_grad_norm))
                 metric_lists["value/grad_norm"].append(float(value_grad_norm))
+                update_progress.update(1)
 
             epochs_run += 1
             mean_epoch_kl = sum(epoch_kls) / max(len(epoch_kls), 1)
             if self.actor_config.target_kl is not None and mean_epoch_kl > self.actor_config.target_kl:
                 break
+        update_progress.close()
 
         returns = data.batch["fpo.returns"].float()
         metric_device = returns.device
         valids = data.batch["info.valids"].to(metric_device).float()
         rewards = data.batch["info.rewards"].to(metric_device).float()
         old_values = data.batch["fpo.old_values"].to(metric_device).float()
+        explained_variance = distributed_explained_variance(returns, old_values, valids)
         valid_count = valids.sum().clamp_min(1.0)
-        return_mean = (returns * valids).sum() / valid_count
-        return_variance = ((returns - return_mean).square() * valids).sum() / valid_count
-        residual_variance = ((returns - old_values).square() * valids).sum() / valid_count
-        explained_variance = 1.0 - residual_variance / return_variance.clamp_min(1e-8)
 
         metrics = {key: sum(values) / len(values) for key, values in metric_lists.items() if values}
         metrics.update(
