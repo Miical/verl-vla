@@ -390,6 +390,10 @@ class TrainCluster:
         assert self.env_loop is not None
 
         if not async_rollout:
+            # A separate rollout model is not updated by the actor optimizer.
+            # Synchronize immediately before collection so on-policy trainers
+            # never collect with the preceding actor version.
+            self.update_weights()
             output, last_obs, collected_datasets, metrics, self.rollout_state = self._rollout_once(
                 self.env_loop,
                 config=self.config,

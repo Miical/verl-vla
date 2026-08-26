@@ -134,9 +134,7 @@ class PI0AdapterConfig:
         config = {
             name: value
             for name, value in vars(self).items()
-            if name not in private_runtime_fields
-            and not name.startswith("_")
-            and name not in ("critic", "fpo", "dsrl")
+            if name not in private_runtime_fields and not name.startswith("_") and name not in ("critic", "fpo", "dsrl")
         }
         config["critic"] = self.critic.to_dict()
         config["fpo"] = self.fpo.to_dict()
