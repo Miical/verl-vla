@@ -661,6 +661,32 @@ class PaliGemmaWithExpertModel(nn.Module):
         """Embed token ids into continuous vectors."""
         return self.embed_tokens(tokens)
 
+    def freeze_vlm_backbone(self) -> None:
+        """Freeze the vision-language stream without freezing the action expert."""
+
+        vlm_modules = [
+            self.vision_tower,
+            self.multi_modal_projector,
+            self.embed_tokens,
+            self.norms[0],
+        ]
+        for layer in self.layers:
+            vlm_modules.extend(
+                [
+                    layer.self_attn.q_proj[0],
+                    layer.self_attn.k_proj[0],
+                    layer.self_attn.v_proj[0],
+                    layer.self_attn.o_proj[0],
+                    layer.mlps[0],
+                    layer.input_layernorms[0],
+                    layer.post_attention_layernorms[0],
+                ]
+            )
+
+        for module in vlm_modules:
+            module.requires_grad_(False)
+            module.eval()
+
     def forward(
         self,
         attention_mask: Optional[torch.Tensor] = None,

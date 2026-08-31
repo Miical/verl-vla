@@ -83,6 +83,7 @@ class PI0AdapterConfig:
         "norm_stats_path": None,
         "state_norm_stats": {},
         "action_norm_stats": {},
+        "freeze_vlm_backbone": True,
         "flow_sde_enable": True,
         "flow_sde_noise_level": 0.5,
         "flow_sde_task_noise_level": {},

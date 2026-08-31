@@ -124,12 +124,16 @@ class PI0TrainableModel(
         self.pi05_enabled = config.pi05_enabled
         self.embodiment = config.embodiment
         self.action_chunk_size = int(getattr(config, "action_chunk_size", 10))
+        self.freeze_vlm_backbone_enabled = bool(config.freeze_vlm_backbone)
         self.critic_type = config.critic.type
         self.critic = None
 
         assert self.state_norm_stats, "state_norm_stats must be provided for the PI0 adapter"
         assert self.action_norm_stats, "action_norm_stats must be provided for the PI0 adapter"
         assert isinstance(self.pi05_enabled, bool), "pi05_enabled must be provided by the native PI0 policy config"
+
+        if self.freeze_vlm_backbone_enabled:
+            self.policy.paligemma_with_expert.freeze_vlm_backbone()
 
         self.fpo_value_head = None
         if config.fpo.enabled:
@@ -388,15 +392,6 @@ class PI0TrainableModel(
     def can_generate(self) -> bool:
         return False
 
-    def freeze_vision_tower(self) -> None:
-        """Freeze the vision tower parameters."""
-
-        if self.policy is None:
-            raise RuntimeError("PI0TrainableModel.policy is not initialized. Did from_pretrained() run?")
-        vision_tower = self.policy.paligemma_with_expert.vision_tower
-        vision_tower.requires_grad_(False)
-        vision_tower.eval()
-
     def _dsrl_actor_inputs(
         self,
         state_features,
@@ -413,7 +408,6 @@ class PI0TrainableModel(
     @override
     def sft_init(self):
         """Override SupportSFTTraining.sft_init for PI0 SFT setup."""
-        self.freeze_vision_tower()
         register_fsdp_forward_method(self, "sft_loss")
 
     @override
@@ -510,7 +504,6 @@ class PI0TrainableModel(
             raise ValueError("FPO and DSRL noise steering cannot be enabled together.")
         if not self.policy.use_cache:
             raise ValueError("FPO requires the PI0 prefix KV cache (model use_cache=true).")
-        self.freeze_vision_tower()
         register_fsdp_forward_method(self, "fpo_cfm_loss")
         register_fsdp_forward_method(self, "fpo_forward_value")
 
@@ -799,7 +792,6 @@ class PI0TrainableModel(
         if self.dsrl is not None:
             self.policy.requires_grad_(False)
             self.policy.eval()
-        self.freeze_vision_tower()
         forward_methods = [
             "sft_loss",
             "sac_sample_actions",
@@ -947,25 +939,23 @@ class PI0TrainableModel(
     ):
         pi0_input_cls, _ = self._get_pi0_embodiment_classes()
         pi0_input = pi0_input_cls.from_env_obs(obs)
+        state = self.state_normalize_transform(pi0_input.state)
+        needs_prefix = self.dsrl is None or self.dsrl.actor_type != "cnn" or self.critic_type != "cnn"
+        if not needs_prefix:
+            pixels = obs.batch["observation.images.image"]
+            critic_state = obs.batch["observation.state"]
+            return ((), state, (pixels, critic_state))
 
-        with torch.no_grad():
-            state = self.state_normalize_transform(pi0_input.state)
-            needs_prefix = self.dsrl is None or self.dsrl.actor_type != "cnn" or self.critic_type != "cnn"
-            if not needs_prefix:
-                pixels = obs.batch["observation.images.image"]
-                critic_state = obs.batch["observation.state"]
-                return ((), state, (pixels, critic_state))
-
-            images, _ = self.image_transform.call_batch(pi0_input.images)
-            lang_tokens, lang_masks = self.prompt_tokenizer_transform.call_batch(
-                {"task": pi0_input.task, "observation.state": state}, tokenizer
-            )
-            prefix_features = self.policy.embed_prefix(
-                images=images,
-                img_masks=pi0_input.img_masks,
-                lang_tokens=lang_tokens,
-                lang_masks=lang_masks,
-            )
+        images, _ = self.image_transform.call_batch(pi0_input.images)
+        lang_tokens, lang_masks = self.prompt_tokenizer_transform.call_batch(
+            {"task": pi0_input.task, "observation.state": state}, tokenizer
+        )
+        prefix_features = self.policy.embed_prefix(
+            images=images,
+            img_masks=pi0_input.img_masks,
+            lang_tokens=lang_tokens,
+            lang_masks=lang_masks,
+        )
         if self.critic_type == "cnn" or (self.dsrl is not None and self.dsrl.actor_type == "cnn"):
             pixels = obs.batch["observation.images.image"]
             critic_state = obs.batch["observation.state"]
