@@ -12,6 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+hydra:
+  searchpath:
+    - pkg://verl_vla.workflows.config
+
 defaults:
   - /train/sft@_global_
   - override /model/adapter@cluster.actor_rollout_ref.model.adapter: openvla
