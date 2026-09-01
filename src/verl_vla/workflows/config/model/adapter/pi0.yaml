@@ -35,7 +35,7 @@ action_chunk_size: 10
 
 # Whether to freeze the PaliGemma vision-language backbone while leaving the
 # action expert and action projections trainable.
-freeze_vlm_backbone: true
+freeze_vlm_backbone: false
 
 # Optional critic owned by the PI0 adapter.
 critic:
